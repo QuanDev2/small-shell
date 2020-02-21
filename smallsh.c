@@ -41,7 +41,7 @@ int main() {
 	//sigaction(SIGINT, &SIGINT_action, NULL);
 
 	while (true) {
-		char args[MAX_ARGS][ARG_LEN] = { '\0' };
+		char *args[MAX_ARGS] = { '\0' };
 		int argc = 0;
 		char* buffer = NULL;
 
@@ -65,6 +65,9 @@ int main() {
 			// extract each arg and put it in array
 			char* token = strtok(buffer, " ");
 			while (token != NULL) {
+
+				args[argc] = calloc(strlen(token), sizeof(char));
+				memset(args[argc], '\0', strlen(token));
 				strcpy(args[argc], token);
 				token = strtok(NULL, " ");
 				argc++;
@@ -114,16 +117,16 @@ int main() {
 					//printf("Foreground process\n");
 					pid_t spawnid = -5;
 					char* temp[] = { "ls", "-lap", NULL, NULL };
-
+;
 					spawnid = fork();
 					switch (spawnid) {
 					case -1:
 						perror("Fork Error!\n");
 						exit(1);
 						break;
-					case 0:;
+					case 0:
 						//printf("Child Process.. \n");
-						execCode = execvp("ls", temp);
+						execvp(args[0], args);
 						perror("Invalid Command! Command can't be executed\n");
 						exit(1);
 						break;
