@@ -10,7 +10,7 @@
 #include <unistd.h>
 #include <wait.h>
 
-#define MAX_ARGS 5  // 512
+#define MAX_ARGS 10  // 512
 #define MAX_CHARS 2048
 #define DIR_LEN 512
 #define ARG_LEN 16  //256
@@ -31,29 +31,38 @@ void printArr(char** arr, int len) {
   }
 }
 
-int stripArgs(char** args, int argc, char** newArgs, int* newArgc, char* ioChar) {
-  int newFD, i, j, ioCharPos = 0;
-  for (i = 0; i < argc; i++) {
-    if (strcmp(args[i], ioChar) == 0) {
-      ioCharPos = i;
-      for (j = 0; j < argc; j++) {
-        if (strcmp(args[j], args[i]) != 0 && strcmp(args[j], args[i + 1]) != 0) {
-          newArgs[*newArgc] = calloc(strlen(args[j]), sizeof(char));
-          memset(newArgs[*newArgc], '\0', strlen(args[j]));
-          strcpy(newArgs[*newArgc], args[j]);
-          *newArgc = *newArgc + 1;
+bool ifExists(char** arr, int len, char* str) {
+  int i;
+  for (i = 0; i < len; i++) {
+    if (strcmp(arr[i], str) == 0) return true;
+  }
+  return false;
+}
+
+int stripArgs(char** args, int* argc, char* ioChar) {
+  int stripPos, newFD, ioCharPos;
+  if (ifExists(args, *argc, ioChar) == true) {
+    for (stripPos = 0; stripPos < *argc; stripPos++) {
+      if (strcmp(args[stripPos], ioChar) == 0) {
+        int j;
+        if (strcmp(ioChar, ">") == 0) {
+          newFD = open(args[stripPos + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        } else if (strcmp(ioChar, "<") == 0)
+          newFD = open(args[stripPos + 1], O_RDONLY, 0644);
+        if (newFD == -1) {
+          perror("open() file error\n");
         }
+        for (j = stripPos; j < *argc - 2; j++) {
+          strcpy(args[j], args[j + 2]);
+        }
+        break;
       }
     }
-  }
+    *argc = *argc - 2;
 
-  // printArr(args, argc);
-  if (strcmp(ioChar, ">") == 0) {
-    newFD = open(args[ioCharPos + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-  } else if (strcmp(ioChar, "<") == 0)
-    newFD = open(args[ioCharPos + 1], O_RDONLY, 0644);
-  if (newFD == -1) {
-    perror("open() file error\n");
+    // return newFD;
+  } else {
+    newFD = strcmp(ioChar, ">") == 0 ? 1 : 0;
   }
   return newFD;
 }
@@ -166,58 +175,28 @@ int main() {
             exit(1);
             break;
           case 0:;
-            // redirect IO from CLI
-            // Loop thru input array, find IO character < or >
-            int newArgc, inFD;
-            printf("Hey child\n");
-            int outFD = stripArgs(args, argc, newArgs, &newArgc, ">");
-            // for (i = 0; i < argc; i++) {
-            //   if (strcmp(args[i], ">") == 0) {
-            //     // printf("%s\n", args[i + 2]);
-            //     outFD = open(args[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            //     // new args to hold the args without > char and its FD
-            //     int j, k = 0;
-            //     for (j = 0; j < argc; j++) {
-            //       if (strcmp(args[j], args[i]) != 0 && strcmp(args[j], args[i + 1]) != 0) {
-            //         argsOutnew[k] = calloc(strlen(args[j]), sizeof(char));
-            //         memset(argsOutnew[k], '\0', strlen(args[j]));
-            //         strcpy(argsOutnew[k], args[j]);
-            //         k = k + 1;
-            //         argcnew = argcnew + 1;
-            //       }
-            //     }
 
-            //     if (outFD == -1) {
-            //       perror("open() file error\n");
-            //     }
-            //   } else if (strcmp(args[i], "<") == 0) {
-            //     inFD = open(args[i + 1], O_RDONLY, 0644);
-            //     strcpy(args[i + 1], " ");
-            //     if (inFD == -1) {
-            //       perror("open() file error\n");
-            //     }
-            //   }
-            // }
-            printArr(newArgs, newArgc);
-            printf("newArgc: %d, outFD: %d\n", newArgc, outFD);
-            int outFD_result = dup2(outFD, 1);
+            int outFD = stripArgs(args, &argc, ">");
+            int inFD = stripArgs(args, &argc, "<");
             int inFD_result = dup2(inFD, 0);
-            if (outFD_result == -1) perror("redirection output error\n");
             if (inFD_result == -1) perror("redirection input error\n");
-            if (strcmp(args[argc - 1], "&") == 0) {
-              // strip the & character
-              args[argc - 1] = NULL;
-              printf("Background process pid: %d\n", getpid());
-
-              // Redirection IO
-              int devNullFD = open("/dev/null", O_WRONLY, 0644);
-              dup2(devNullFD, 1);
-              dup2(devNullFD, 2);
-            }
-            newArgs[newArgc] = NULL;
-            execvp(newArgs[0], newArgs);
-            perror("Invalid Command! Command can't be executed\n");
+            int outFD_result = dup2(outFD, 1);
+            if (outFD_result == -1) perror("redirection output error\n");
+            args[argc] = NULL;
+            execvp(args[0], args);
+            perror("Invalid Command!\n");
             exit(1);
+
+            // if (strcmp(args[argc - 1], "&") == 0) {
+            //   // strip the & character
+            //   args[argc - 1] = NULL;
+            //   printf("Background process pid: %d\n", getpid());
+
+            //   // Redirection IO
+            //   int devNullFD = open("/dev/null", O_WRONLY, 0644);
+            //   dup2(devNullFD, 1);
+            //   dup2(devNullFD, 2);
+            // }
             break;
           default:
             // If cmd is background process
