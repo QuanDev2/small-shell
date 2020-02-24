@@ -195,7 +195,7 @@ int main() {
             //   // Redirection IO
             //   int devNullFD = open("/dev/null", O_WRONLY, 0644);
             //   dup2(devNullFD, 1);
-            //   dup2(devNullFD, 2);
+            //   dup2(devNullFD, 2);a
             // }
             break;
           default:
