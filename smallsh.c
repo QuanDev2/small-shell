@@ -22,25 +22,34 @@
 // 	write(STDOUT_FILENO, message, 28);
 // }
 
-void checkBackground(pid_t*, int*);
+void checkBackground(pid_t *, int *);
 
-void printArr(char** arr, int len) {
+bool isBackground(char **args, int argc) {
+  if (strcmp(args[argc - 1], "&") == 0)
+    return true;
+  else
+    return false;
+}
+
+void printArr(char **arr, int len) {
   int i;
   for (i = 0; i < len; i++) {
     printf("i=%d  ->  %s\n", i, arr[i]);
   }
 }
 
-bool ifExists(char** arr, int len, char* str) {
+bool ifExists(char **arr, int len, char *str) {
   int i;
   for (i = 0; i < len; i++) {
-    if (strcmp(arr[i], str) == 0) return true;
+    if (strcmp(arr[i], str) == 0)
+      return true;
   }
   return false;
 }
 
-int stripArgs(char** args, int* argc, char* ioChar) {
+int stripArgs(char **args, int *argc, char *ioChar) {
   int stripPos, newFD, ioCharPos;
+
   if (ifExists(args, *argc, ioChar) == true) {
     for (stripPos = 0; stripPos < *argc; stripPos++) {
       if (strcmp(args[stripPos], ioChar) == 0) {
@@ -52,6 +61,9 @@ int stripArgs(char** args, int* argc, char* ioChar) {
         if (newFD == -1) {
           perror("open() file error\n");
         }
+        // printf("Before:\n");
+        // printArr(args, *argc);
+
         for (j = stripPos; j < *argc - 2; j++) {
           strcpy(args[j], args[j + 2]);
         }
@@ -59,15 +71,17 @@ int stripArgs(char** args, int* argc, char* ioChar) {
       }
     }
     *argc = *argc - 2;
-
-    // return newFD;
   } else {
     newFD = strcmp(ioChar, ">") == 0 ? 1 : 0;
   }
+  // printf("argc: %d\n", *argc);
+  // printf("After:\n");
+
+  // printArr(args, *argc);
   return newFD;
 }
 
-int getNewArgsSize(char* args[MAX_ARGS], int argc) {
+int getNewArgsSize(char *args[MAX_ARGS], int argc) {
   int i;
   int newSize = argc;
   for (i = 0; i < argc; i++) {
@@ -96,9 +110,9 @@ int main() {
   //sigaction(SIGINT, &SIGINT_action, NULL);
 
   while (true) {
-    char* args[MAX_ARGS] = {'\0'};
+    char *args[MAX_ARGS] = {'\0'};
     int argc = 0;
-    char* buffer = NULL;
+    char *buffer = NULL;
 
     // check background processes
     int i;
@@ -128,11 +142,15 @@ int main() {
     // if input is comment or blank, ignore it
     if ((strlen(buffer) != 0) && (buffer[0] != '#')) {
       // extract each arg and put it in array
-      char* token = strtok(buffer, " ");
+      char *token = strtok(buffer, " ");
       while (token != NULL) {
         args[argc] = calloc(strlen(token), sizeof(char));
         memset(args[argc], '\0', strlen(token));
-        strcpy(args[argc], token);
+        // expand PID
+        if (strcmp(token, "$$") == 0)
+          sprintf(args[argc], "%d", getpid());
+        else
+          strcpy(args[argc], token);
         token = strtok(NULL, " ");
         argc++;
       }
@@ -153,11 +171,11 @@ int main() {
         else if (argc == 1) {
           char s[DIR_LEN];
           getcwd(s, DIR_LEN);
-          printf("Old dir: %s\n", s);
+          // printf("Old dir: %s\n", s);
           chdir(getenv("HOME"));
           getcwd(s, DIR_LEN);
 
-          printf("New dir: %s\n", s);
+          // printf("New dir: %s\n", s);
         }
         // if cd has one argument
         else {
@@ -166,8 +184,10 @@ int main() {
       } else {
         // non built-in cmds
         pid_t spawnid = -5;
-        const int newArgsSize = getNewArgsSize(args, argc);
-        char* newArgs[newArgsSize];
+        int newArgsSize = getNewArgsSize(args, argc);
+        if (isBackground(args, argc) == true)
+          newArgsSize = newArgsSize - 1;
+        char *newArgs[newArgsSize];
         spawnid = fork();
         switch (spawnid) {
           case -1:
@@ -175,28 +195,40 @@ int main() {
             exit(1);
             break;
           case 0:;
+            int inFD, outFD;
+            // check if it's background project
+            if (isBackground(args, argc) == true) {
+              // strip the & character
+              args[argc - 1] = NULL;
+              argc--;
+              printf("Background process pid: %d\n", getpid());
+              // Redirection IO
+              if (ifExists(args, argc, ">") == true) {
+                outFD = stripArgs(args, &argc, ">");
+              } else {
+                outFD = open("/dev/null", O_WRONLY, 0644);
+              }
+              if (ifExists(args, argc, "<") == true)
+                inFD = stripArgs(args, &argc, "<");
+              else
+                inFD = open("/dev/null", O_RDONLY, 0644);
+            } else  // foreground process
+            {
+              outFD = stripArgs(args, &argc, ">");
+              inFD = stripArgs(args, &argc, "<");
+            }
 
-            int outFD = stripArgs(args, &argc, ">");
-            int inFD = stripArgs(args, &argc, "<");
             int inFD_result = dup2(inFD, 0);
-            if (inFD_result == -1) perror("redirection input error\n");
+            if (inFD_result == -1)
+              perror("redirection input error\n");
             int outFD_result = dup2(outFD, 1);
-            if (outFD_result == -1) perror("redirection output error\n");
+            if (outFD_result == -1)
+              perror("redirection output error\n");
             args[argc] = NULL;
             execvp(args[0], args);
             perror("Invalid Command!\n");
             exit(1);
 
-            // if (strcmp(args[argc - 1], "&") == 0) {
-            //   // strip the & character
-            //   args[argc - 1] = NULL;
-            //   printf("Background process pid: %d\n", getpid());
-
-            //   // Redirection IO
-            //   int devNullFD = open("/dev/null", O_WRONLY, 0644);
-            //   dup2(devNullFD, 1);
-            //   dup2(devNullFD, 2);a
-            // }
             break;
           default:
             // If cmd is background process
