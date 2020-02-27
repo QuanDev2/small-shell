@@ -10,20 +10,16 @@
 #include <unistd.h>
 #include <wait.h>
 
-#define MAX_ARGS 10  // 512
+#define MAX_ARGS 512
 #define MAX_CHARS 2048
-#define DIR_LEN 512
-#define ARG_LEN 16  //256
+#define DIR_LEN 256
 #define MAX_NUM_PROC 128
 
 // foreground process PID
 pid_t g_foregroundPID = -9;
 bool g_fgOnlyMode = false;
-// void catchSIGINT(int signo)
-// {
-// 	char* message = "SIGINT. Use CTRL-Z to Stop.\n";
-// 	write(STDOUT_FILENO, message, 28);
-// }
+int g_exitStatus = -9;
+int g_termSignal = -9;
 
 void sigint_handler(int);
 
@@ -43,9 +39,10 @@ int stripArgs(char **, int *, char *);
 
 int getNewArgsSize(char **, int);
 
+void checkExitandTerm(int);
+
 int main() {
   int numCharsEntered = -5;
-  // strcpy(args[0], "Hi");
   size_t bufferSize = MAX_CHARS;
   pid_t bgProcessList[MAX_NUM_PROC] = {-2};
   int bgProcessCount = 0;
@@ -75,70 +72,72 @@ int main() {
     char *args[MAX_ARGS] = {'\0'};
     int argc = 0;
     char *buffer = NULL;
-
-    // check background processes
     int i;
-    for (i = 0; i < bgProcessCount && bgProcessCount > 0; i++) {
-      int bgStatus = waitpid(bgProcessList[0], &childExitMethod, WNOHANG);
-      if (bgStatus != -1 && bgStatus != 0) {
-        printf("Background process done - pid: %d\n", bgStatus);
-        fflush(stdout);
-        bgProcessList[i] = 0;
-        bgProcessCount = bgProcessCount - 1;
-      }
-    }
+
     printf(": ");
     fflush(stdout);
 
+    // read input
     numCharsEntered = getline(&buffer, &bufferSize, stdin);
     // handle getline error if there's signal
     if (numCharsEntered == -1)
       clearerr(stdin);
 
     // remove trailing new line
-    //buffer[strlen(buffer) - 1] = '\0';
     buffer[strcspn(buffer, "\n")] = '\0';
 
-    size_t wholeBufferLen = strlen(buffer);
-    // if input is comment or blank, ignore it
+    // if input is not a comment nor blank
     if ((strlen(buffer) != 0) && (buffer[0] != '#')) {
-      // extract each arg and put it in array
+      // tokenize input
       char *token = strtok(buffer, " ");
-      while (token != NULL) {
-        if (g_fgOnlyMode == true && strcmp(token, "&") == 0) {
-          token = strtok(NULL, " ");
-          continue;
-        }
-        args[argc] = calloc(strlen(token) + 1, sizeof(char));
-        memset(args[argc], '\0', strlen(token));
-        // expand PID
-        // if (strcmp(token, "$$") == 0)
-        //   sprintf(args[argc], "%d", getpid());
-        char *dollarSign = strstr(token, "$$");
-        if (dollarSign != NULL) {
-          int newArgLen = strlen(token) + sizeof(getpid()) - 2;
-          args[argc] = calloc(newArgLen + 1, sizeof(char));
-          char temp[newArgLen + 1];
-          strncpy(temp, token, strlen(token) - 2);
-          char pid_str[sizeof(getpid())];
-          sprintf(pid_str, "%d", getpid());
-          strcat(temp, pid_str);
-          // printChars(temp, strlen(temp));
-          strcpy(args[argc], temp);
-          // printChars(args[argc], strlen(args[argc]));
-        } else
-          strcpy(args[argc], token);
 
+      while (token != NULL) {
+        // if in foreground only mode, ignore &
+        if (g_fgOnlyMode == true && strcmp(token, "&") == 0) {
+          break;
+        }
+
+        // expand $$ to PID
+        char *pid_pos = strstr(token, "$$");
+        if (pid_pos != NULL) {
+          int pid_len = sizeof(getpid());
+          char pid_str[pid_len];
+          int token_len = strlen(token);
+          int arg_len = token_len + pid_len - 2;
+          // convert pid to string
+          sprintf(pid_str, "%d", getpid());
+
+          // create string temp to hold the new arg value
+          char temp[arg_len];
+
+          // copy the part of token before $$
+          strncpy(temp, token, token_len - strlen(pid_pos));
+          // concat pid to temp
+          strcat(temp, pid_str);
+
+          // concat 2nd half of token to temp
+          strcat(temp, pid_pos + 2);
+          // allocate memory for args and copy temp to args
+          args[argc] = calloc(arg_len, sizeof(char));
+          strcpy(args[argc], temp);
+        }
+
+        else {
+          args[argc] = calloc(strlen(token), sizeof(char));
+          strcpy(args[argc], token);
+        }
         token = strtok(NULL, " ");
         argc++;
       }
       // built-in commands
       if (strcmp(args[0], "exit") == 0) {
         // send sigkill to all children
-
+        for (i = 0; i < bgProcessCount; i++) {
+          kill(bgProcessList[i], SIGKILL);
+        }
         exit(0);
       } else if (strcmp(args[0], "status") == 0) {
-        printf("exit value 0\n");
+        printf("exit status: %d\n", g_exitStatus);
       } else if (strcmp(args[0], "cd") == 0) {
         // if cd has more than two args, then it's invalid
         if (argc > 2) {
@@ -149,11 +148,8 @@ int main() {
         else if (argc == 1) {
           char s[DIR_LEN];
           getcwd(s, DIR_LEN);
-          // printf("Old dir: %s\n", s);
           chdir(getenv("HOME"));
           getcwd(s, DIR_LEN);
-
-          // printf("New dir: %s\n", s);
         }
         // if cd has one argument
         else {
@@ -161,6 +157,7 @@ int main() {
         }
       } else {
         // non built-in cmds
+        // newArgs = args with IO redirection stripped out
         pid_t spawnid = -5;
         int newArgsSize = getNewArgsSize(args, argc);
         if (isBackground(args, argc) == true)
@@ -173,6 +170,7 @@ int main() {
             exit(1);
             break;
           case 0:
+            // ignore SIGTSTP
             sigaction(SIGTSTP, &ignore_action, NULL);
             int inFD, outFD;
             // check if it's background project
@@ -180,13 +178,16 @@ int main() {
               // strip the & character
               args[argc - 1] = NULL;
               argc--;
-              printf("Background process pid: %d\n", getpid());
+              // printf("Background process pid: %d\n", getpid());
               // Redirection IO
+              // if there's ">", strip it and its following arg
+
               if (ifExists(args, argc, ">") == true) {
                 outFD = stripArgs(args, &argc, ">");
               } else {
                 outFD = open("/dev/null", O_WRONLY, 0644);
               }
+              // if there's "<", strip it and its following arg
               if (ifExists(args, argc, "<") == true)
                 inFD = stripArgs(args, &argc, "<");
               else
@@ -204,6 +205,8 @@ int main() {
             if (outFD_result == -1)
               perror("redirection output error\n");
             args[argc] = NULL;
+            // fcntl(inFD, F_SETFD, FD_CLOEXEC);
+            // fcntl(outFD, F_SETFD, FD_CLOEXEC);
             execvp(args[0], args);
             perror("Invalid Command!\n");
             exit(1);
@@ -217,26 +220,26 @@ int main() {
             if (strcmp(args[argc - 1], "&") == 0) {
               bgProcessList[bgProcessCount] = spawnid;
               bgProcessCount = bgProcessCount + 1;
+              printf("Background [%d] - PID %d\n", bgProcessCount, spawnid);
             } else {
+              // printf("spawnid: %d\n", spawnid);
               int childPid_actual = waitpid(spawnid, &childExitMethod, 0);
+              checkExitandTerm(childExitMethod);
             }
-
-            // get exit status of the child
-            // if child terminates normally
-            if (WIFEXITED(childExitMethod) != 0) {
-              int exitStatus = WEXITSTATUS(childExitMethod);
-              // printf("terminated normally, exitStatus: %d\n", exitStatus);
-              // printf("child exit method: %d\n", childExitMethod);
-            }
-            // if child terminated by a signal
-            else if (WIFSIGNALED(childExitMethod) != 0) {
-              int termSignal = WTERMSIG(childExitMethod);
-              // printf("terminated by signal, termSignal: %d\n", termSignal);
-              // printf("child exit method: %d\n", childExitMethod);
-            }
-
             break;
         }
+      }
+    }
+    // check all bg processes
+    for (i = 0; i < bgProcessCount && bgProcessCount > 0; i++) {
+      int bgStatus = waitpid(bgProcessList[0], &childExitMethod, WNOHANG);
+      if (bgStatus != -1 && bgStatus != 0) {
+        printf("Background [%d] done - PID: %d\n", bgProcessCount, bgStatus);
+        printf("Exit status: %d\n", exitCode);
+        fflush(stdout);
+        bgProcessList[i] = 0;
+        bgProcessCount = bgProcessCount - 1;
+        checkExitandTerm(childExitMethod);
       }
     }
     free(buffer);
@@ -283,8 +286,6 @@ int stripArgs(char **args, int *argc, char *ioChar) {
         if (newFD == -1) {
           perror("open() file error\n");
         }
-        // printf("Before:\n");
-        // printArr(args, *argc);
 
         for (j = stripPos; j < *argc - 2; j++) {
           strcpy(args[j], args[j + 2]);
@@ -320,8 +321,9 @@ void sigint_handler(int sigNum) {
 }
 
 void sigtstp_handler(int sigNum) {
+  // kill(g_foregroundPID, 0) != 0 &&
   // if PID is dead
-  if (kill(g_foregroundPID, 0) != 0 && g_fgOnlyMode == false) {
+  if (g_fgOnlyMode == false) {
     write(STDERR_FILENO, "Entering foreground-only mode (& is now ignored)\n", 49);
     g_fgOnlyMode = true;
   }
@@ -336,5 +338,16 @@ void printChars(char *arr, int len) {
   int i;
   for (i = 0; i < len; i++) {
     printf("i=%d  ->  %c\n", i, arr[i]);
+  }
+}
+
+void checkExitandTerm(int childExitMethod) {
+  if (WIFEXITED(childExitMethod) != 0) {
+    g_exitStatus = WEXITSTATUS(childExitMethod);
+  }
+  // if child terminated by a signal
+  else if (WIFSIGNALED(childExitMethod) != 0) {
+    g_termSignal = WTERMSIG(childExitMethod);
+    printf("Terminated by signal %d\n", g_termSignal);
   }
 }
